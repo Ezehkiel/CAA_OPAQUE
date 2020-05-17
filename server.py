@@ -42,12 +42,16 @@ P_u = p_u.lift() * g
 
 
 def pad(x, y):
+    # on enlève 0b de la string
     x = x[2:]
     y = y[2:]
+    # On regarde la différence de longuezr etre les deux
     diff = abs(len(x) - len(y))
+    # Si pas de différence on laisse comme ça
     if not diff:
         return x, y
 
+    # Si x est plus grand on ajout diff * 0 à y et si y est plus grand on fait la même chose mais pour x
     if len(x) > len(y):
         return x, ('0' * diff) + y
     elif len(x) < len(y):
@@ -55,18 +59,20 @@ def pad(x, y):
 
 
 def compute_rw():
+    # On hash le password
     blk2 = BLAKE2b.new(digest_bits=256)
-
     blk2.update(PWD.encode())
+    # On calcule H' (ks * H(pwd) * g)
     H_prime = (k_s * Integer("0x" + blk2.hexdigest())).lift() * g
     H_prime_x = H_prime[0]
     H_prime_y = H_prime[1]
 
+    # On fait en sorte que x et y de H' soient de la même taille en les paddant
     x, y = pad(bin(H_prime_x), bin(H_prime_y))
-
+    # On les concatène pour ensuite repasser en int pour ensuite repasser en binaire
     x_y = x + y
     x_y = int(x_y, base=2)
-
+    # On passe le password en binaire pour le concatener avec x et y de H'
     password_bin = ' '.join(format(ord(x), 'b') for x in PWD).replace(" ", "")
     padded_password, padded_h_prime = pad(bin(int(password_bin, base=2)), bin(x_y))
 
@@ -74,7 +80,9 @@ def compute_rw():
     blk2.update((padded_password + padded_h_prime).encode())
     rw = blk2.hexdigest()
     print("RW: ", rw)
+    # On met rw en format binaire
     rw = bin(Integer('0x' + rw))
+    # On regarde s'il y a des 0 qui ont été enlevé et on les rajoute
     missing_bit = 256 - len(rw[2:])
     rw = ('0' * missing_bit) + rw[2:]
 
@@ -83,19 +91,14 @@ def compute_rw():
 
 def compute_c(key):
     cipher = AES.new(bitstring_to_bytes(key), AES.MODE_CTR)
-    print("p_u", p_u)
-    print("P_u", P_u)
-    print("P_s", P_s)
+    # On concatène avec des séparateurs les datas que on veut chiffrer pour pouvoir les récuperer après
     data = str(p_u) + ";" + str(P_u[0]) + "," + str(P_u[1]) + ";" + str(P_s[0]) + "," + str(P_s[1])
     secret = "YWEyZTk2NThhYzhjMjE0MmQ5YTljMzY4NDA5OTBjNzEzMjJhNDM0YThmNWIxMDRm"
     c = cipher.encrypt(data.encode())
+
     h = HMAC.new(secret.encode(), digestmod=SHA256)
     h.update(c)
     return b2a_hex(c), h.hexdigest(), b2a_hex(cipher.nonce)
-
-    # nonce = cipher.nonce
-    # cipher2 = AES.new(bitstring_to_bytes(key), AES.MODE_CTR, nonce=nonce)
-    # pt = cipher2.decrypt(c)
 
 
 def write_file(c_final, c_mac, nonce, id_user=0):
@@ -116,8 +119,7 @@ def get_alpha_and_x_u(payload):
         alpha = EC(FF(alpha_points[0]), FF(alpha_points[1]))
         return X_u, alpha
     except TypeError:
-        print("Perdu")
-        return "", ""
+        raise
 
 
 def fetch_in_file(sid=0):
@@ -135,27 +137,15 @@ def compute_ssid_prime(sid, ssid, alpha):
     # on va passer le sid et le ssid en binaire et on va padder jusqu'a 128, cela laisse des pareametre de 16 characters
     sid_bin = format(sid, "0128b")
     ssid_bin = ' '.join('{0:08b}'.format(ord(x), 'b') for x in ssid).replace(" ", "")
-    # print(ssid_bin)
     if len(ssid_bin) < 128:
         diff = 128 - len(ssid_bin)
         ssid_bin = '0' * diff + ssid_bin
 
-    # print("alpha", alpha)
     alpha_x = alpha[0]
     alpha_y = alpha[1]
 
-    # print("x", alpha_x)
-    # print("y", alpha_y)
-
     x, y = pad(bin(alpha_x), bin(alpha_y))
-    # print(bin(alpha_x))
-    # print(len(bin(alpha_x)))
-    # print(bin(alpha_y))
-    # print(len(bin(alpha_y)))
-    # print(x+y)
-    # print(len(x + y))
-    # print(sid_bin)
-    # print(ssid_bin)
+
     blk2 = BLAKE2b.new(digest_bits=256)
     blk2.update((sid_bin + ssid_bin + x + y).encode())
 
@@ -188,7 +178,6 @@ def compute_e_u(_X_u, _ssid_prim):
     blk2.update((x + y + server_id_bin + _ssid_prim).encode())
     # On creer un Integer depuis notre hexa puis on fait modulo q
     return Fq(Integer('0x' + blk2.hexdigest()))
-    # return Integer('0x' +blk2.hexdigest())
 
 
 def compute_e_s(_X_s, _ssid_prim, _sid):
@@ -205,49 +194,79 @@ def compute_e_s(_X_s, _ssid_prim, _sid):
     _ssid_prim = bin(Integer('0x' + _ssid_prim))
     # On regarde combien de 0 il manque devant
     missing_bit = 256 - len(_ssid_prim[2:])
-    # On ajouter les 0 manquant
+    # On ajouter les 0 manquants
     _ssid_prim = ('0' * missing_bit) + _ssid_prim[2:]
 
     blk2 = BLAKE2b.new(digest_bits=256)
     blk2.update((x + y + sid_bin + _ssid_prim).encode())
     # On creer un Integer depuis notre hexa puis on fait modulo q
     return Fq(Integer('0x' + blk2.hexdigest()))
-    # return Integer('0x' +blk2.hexdigest())
 
 
-def client_thread(conn, ip, port, MAX_BUFFER_SIZE=4096):
+def compute_prf(value, prime):
+    secret = "YWEyZTk2NThhYzhjMjE0MmQ5YTljMzY4NDA5OTBjNzEzMjJhNDM0YThmNWIxMDRm"
+    data = str(value) + prime
+    h = HMAC.new(secret.encode(), digestmod=SHA256)
+    h.update(data.encode())
+    return h.hexdigest()
+
+
+def compute_SK(prime):
+    return compute_prf(0, prime)
+
+
+def compute_As(prime):
+    return compute_prf(1, prime)
+
+
+def compute_Au(prime):
+    return compute_prf(2, prime)
+
+
+def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
     # the input is in bytes, so decode it
     input_from_client_bytes = conn.recv(MAX_BUFFER_SIZE)
 
-    # MAX_BUFFER_SIZE is how big the message can be
-    # this is test if it's sufficiently big
-    import sys
-    siz = sys.getsizeof(input_from_client_bytes)
-    if siz >= MAX_BUFFER_SIZE:
-        print("The length of input is probably too long: {}".format(siz))
-
     # decode input and strip the end of line
     input_from_client = input_from_client_bytes.decode("utf8").rstrip()
+    try:
+        X_u, alpha = get_alpha_and_x_u(input_from_client)
+        file_info = fetch_in_file()
+        x_s = Fq.random_element()
+        X_s = x_s.lift() * g
+        beta = alpha * Fq(file_info[1]).lift()
+        ssid_prime = compute_ssid_prime(0, SSID, alpha)
+        e_u = compute_e_u(X_u, ssid_prime)
+        e_s = compute_e_s(X_s, ssid_prime, 0)  # 0 is the user id
+        K = ""
+        # TODO Il faudra calculer le clé et la donner aux deux methodes suivante
+        SK = compute_SK(ssid_prime)
+        A_s = compute_As(ssid_prime)
+        return_payload = "{}${}${}${}".format("{},{}".format(str(beta[0]), str(beta[1])),
+                                              "{},{}".format(str(X_s[0]), str(X_s[1])), file_info[5], A_s)
+        print(return_payload)
 
-    X_u, alpha = get_alpha_and_x_u(input_from_client)
-    file_info = fetch_in_file()
-    x_s = Fq.random_element()
-    X_s = x_s.lift() * g
-    beta = alpha * Fq(file_info[1]).lift()
-    ssid_prime = compute_ssid_prime(0, SSID, alpha)
-    e_u = compute_e_u(X_u, ssid_prime)
-    e_s = compute_e_s(X_s, ssid_prime, 0)  # 0 is the user id
+        # print("Result of processing {} is: {}".format(input_from_client, res))
+        vysl = return_payload.encode("utf8")  # encode the result string
+        conn.sendall(vysl)  # send it to client
 
-    return_payload = "{}${}${}${}".format("{},{}".format(str(beta[0]), str(beta[1])),
-                                          "{},{}".format(str(X_s[0]), str(X_s[1])), file_info[5], "")
+        # the input is in bytes, so decode it
+        input_from_client_bytes = conn.recv(MAX_BUFFER_SIZE)
 
-    print(file_info)
-    print(file_info[5])
-    # print("Result of processing {} is: {}".format(input_from_client, res))
-    vysl = return_payload.encode("utf8")  # encode the result string
-    conn.sendall(vysl)  # send it to client
-    conn.close()  # close connection
-    print('Connection ' + ip + ':' + port + " ended")
+        # decode input and strip the end of line
+        input_from_client = input_from_client_bytes.decode("utf8").rstrip()
+        A_u = compute_Au(ssid_prime)
+        if A_u == input_from_client:
+            print("OK")
+        else:
+            raise
+
+    except:
+        print("Error")
+        exit(1)
+    finally:
+        conn.close()
+        print('Connection ' + ip + ':' + port + " ended")
 
 
 def start_server():
@@ -268,14 +287,10 @@ def start_server():
     soc.listen(10)
     print('Socket now listening')
 
-    # for handling task in separate jobs we need threading
-    # this will make an infinite loop needed for
-    # not reseting server for every client
-
     conn, addr = soc.accept()
     ip, port = str(addr[0]), str(addr[1])
     print('Accepting connection from ' + ip + ':' + port)
-    client_thread(conn, ip, port)
+    client(conn, ip, port)
     soc.close()
 
 
@@ -292,7 +307,4 @@ rw_final = compute_rw()
 c_final, c_mac, nonce = compute_c(rw_final)
 write_file(c_final, c_mac, nonce, 0)  # 0 is the user id
 
-# testx = 0xFFFFFFFFFFFFFFF1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
-# testy = 0xFFFFFFFFFFFFFFF1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
-# g = EC(FF(testx), FF(testy))
 start_server()

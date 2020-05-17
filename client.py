@@ -8,6 +8,7 @@ PWD = "password"
 ID_SERVER = "MTI3MjExY2UyMTJi"
 SSID = "YWM0MjEwYzkxNzll"
 
+# tow = 128
 # secp256r1
 # https://kel.bz/post/sage-p256/
 # Finite field prime
@@ -71,13 +72,12 @@ def get_beta_X_s_c_A_s(payload):
         X_s = EC(FF(X_s_points[0]), FF(X_s_points[1]))
         return beta, X_s, c, A_s
     except TypeError:
-        # print("Perdu")
-        return "", ""
+        raise
 
 
 def compute_rw(_beta):
     beta_calc = _beta * (1 / r).lift()
-    # print(beta_calc)
+
     x, y = pad(bin(beta_calc[0]), bin(beta_calc[1]))
     x_y = x + y
     x_y = int(x_y, base=2)
@@ -87,7 +87,7 @@ def compute_rw(_beta):
     blk2 = BLAKE2b.new(digest_bits=256)
     blk2.update((padded_password + padded_beta).encode())
     rw = blk2.hexdigest()
-    # print("RW: ", rw)
+
     rw = bin(Integer('0x' + rw))
     missing_bit = 256 - len(rw[2:])
     rw = ('0' * missing_bit) + rw[2:]
@@ -100,46 +100,33 @@ def decrypt_c(rw, c):
     data = values[0]
     mac = values[1]
     nonce = values[2]
-    print(a2b_hex(data))
-    print(a2b_hex(nonce))
+
     secret = "YWEyZTk2NThhYzhjMjE0MmQ5YTljMzY4NDA5OTBjNzEzMjJhNDM0YThmNWIxMDRm"
     h = HMAC.new(secret.encode(), digestmod=SHA256)
     h.update(a2b_hex(data))
     try:
         h.hexverify(mac)
-        print("The message '%s' is authentic" % c)
         cipher = AES.new(bitstring_to_bytes(rw), AES.MODE_CTR, nonce=a2b_hex(nonce))
         plaintext = cipher.decrypt(a2b_hex(data))
-        print(plaintext)
+        return plaintext
     except ValueError:
-        print("The message or the key is wrong")
+        raise
 
 
 def compute_ssid_prime(sid, ssid, alpha):
     # on va passer le sid et le ssid en binaire et on va padder jusqu'a 128, cela laisse des pareametre de 16 characters
     sid_bin = format(sid, "0128b")
     ssid_bin = ' '.join('{0:08b}'.format(ord(x), 'b') for x in ssid).replace(" ", "")
-    # print(ssid_bin)
+
     if len(ssid_bin) < 128:
         diff = 128 - len(ssid_bin)
         ssid_bin = '0' * diff + ssid_bin
 
-    # print("alpha", alpha)
     alpha_x = alpha[0]
     alpha_y = alpha[1]
 
-    # print("x", alpha_x)
-    # print("y", alpha_y)
-
     x, y = pad(bin(alpha_x), bin(alpha_y))
-    # print(bin(alpha_x))
-    # print(len(bin(alpha_x)))
-    # print(bin(alpha_y))
-    # print(len(bin(alpha_y)))
-    # print(x+y)
-    # print(len(x + y))
-    # print(sid_bin)
-    # print(ssid_bin)
+
     blk2 = BLAKE2b.new(digest_bits=256)
     blk2.update((sid_bin + ssid_bin + x + y).encode())
 
@@ -198,6 +185,26 @@ def compute_e_s(_X_s, _ssid_prim, _sid):
     return Fq(Integer('0x' + blk2.hexdigest()))
 
 
+def compute_prf(value, prime):
+    secret = "YWEyZTk2NThhYzhjMjE0MmQ5YTljMzY4NDA5OTBjNzEzMjJhNDM0YThmNWIxMDRm"
+    data = str(value) + prime
+    h = HMAC.new(secret.encode(), digestmod=SHA256)
+    h.update(data.encode())
+    return h.hexdigest()
+
+
+def compute_SK(prime):
+    return compute_prf(0, prime)
+
+
+def compute_As(prime):
+    return compute_prf(1, prime)
+
+
+def compute_Au(prime):
+    return compute_prf(2, prime)
+
+
 def bitstring_to_bytes(s):
     v = int(s, 2)
     b = bytearray()
@@ -207,22 +214,35 @@ def bitstring_to_bytes(s):
     return bytes(b[::-1])
 
 
+soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+soc.connect(("127.0.0.1", 12345))
+
 # p = input("Enter your password please\n")
 alpha = compute_alpha("password")
 payload = "{};{}".format("{},{}".format(str(X_u[0]), str(X_u[1])), "{},{}".format(str(alpha[0]), str(alpha[1])))
-# print(payload)
-soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-soc.connect(("127.0.0.1", 12345))
+
 soc.send(payload.encode("utf8"))  # we must encode the string to bytes
 result_bytes = soc.recv(4096)  # the number means how the response can be in bytes
 result_string = result_bytes.decode("utf8")  # the return will be in bytes, so decode
 
-# print(result_string)
-beta, X_s, c, A_s = get_beta_X_s_c_A_s(result_string)
-rw = compute_rw(beta)
-decrypt_c(rw, c)
-ssid_prime = compute_ssid_prime(0, SSID, alpha)
-e_s = compute_e_s(X_s, ssid_prime, 0)
-e_u = compute_e_u(X_u, ssid_prime)
+try:
+    beta, X_s, c, A_s = get_beta_X_s_c_A_s(result_string)
+    rw = compute_rw(beta)
+    plaintext = decrypt_c(rw, c)
+    ssid_prime = compute_ssid_prime(0, SSID, alpha)
+    e_s = compute_e_s(X_s, ssid_prime, 0)
+    e_u = compute_e_u(X_u, ssid_prime)
+    SK_client = compute_SK(ssid_prime)
+    A_s_client = compute_As(ssid_prime)
+    if A_s == A_s_client:
+        A_u = compute_Au(ssid_prime)
 
-# print("Result from server is {}".format(result_string))
+        soc.send(A_u.encode())
+        print("OK")
+    else:
+        print("Error")
+except:
+    print("Error")
+    exit(1)
+finally:
+    soc.close()
