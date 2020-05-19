@@ -103,6 +103,7 @@ def decrypt_c(rw, c):
         h.hexverify(mac)
         cipher = AES.new(rw, AES.MODE_CTR, nonce=bytearray(1))
         plaintext = cipher.decrypt(a2b_hex(data))
+        print("Plaintext: ", plaintext.decode())
         return plaintext.decode()
     except ValueError:
         print("perdu")
@@ -183,7 +184,11 @@ def compute_e_s(_X_s, _ssid_prim):
 def compute_K(X_s, P_s, e_s, x_u, e_u, p_u):
     print("e_u", e_u)
     print("e_s", e_s)
-    print(P_s)
+    print("X_s", X_s)
+    print("P_s", P_s)
+
+    print("X_u = ", x_u.lift()*g)
+    print("P_u = ", p_u.lift()*g)
 
     KE = ((P_s * e_s.lift()) + X_s) * (x_u + (e_u * p_u)).lift()
     x, y = pad(bin(KE[0]), bin(KE[1]))
@@ -196,24 +201,24 @@ def compute_K(X_s, P_s, e_s, x_u, e_u, p_u):
     return blk2.digest()
 
 
-def compute_prf(value, prime):
-    secret = "YWEyZTk2NThhYzhjMjE0MmQ5YTljMzY4NDA5OTBjNzEzMjJhNDM0YThmNWIxMDRm"
+def compute_prf(value, prime, K):
     data = str(value) + b2a_hex(prime).decode()
-    h = HMAC.new(secret.encode(), digestmod=SHA256)
+    print("Data prf", data)
+    h = HMAC.new(K, digestmod=SHA256)
     h.update(data.encode())
     return h.hexdigest()
 
 
-def compute_SK(prime):
-    return compute_prf(0, prime)
+def compute_SK(K, prime):
+    return compute_prf(0, prime, K)
 
 
-def compute_As(prime):
-    return compute_prf(1, prime)
+def compute_As(K, prime):
+    return compute_prf(1, prime, K)
 
 
-def compute_Au(prime):
-    return compute_prf(2, prime)
+def compute_Au(K, prime):
+    return compute_prf(2, prime, K)
 
 
 def bitstring_to_bytes(s):
@@ -240,16 +245,20 @@ try:
     beta, X_s, c, A_s = get_beta_X_s_c_A_s(result_string)
     rw = compute_rw(beta)
     plaintext = decrypt_c(rw, c)
-    p_u, P_s, P_u = parse_c(plaintext)
+    p_u, P_u, P_s = parse_c(plaintext)
     ssid_prime = compute_ssid_prime(1, SSID, alpha)
     e_s = compute_e_s(X_s, ssid_prime)
     e_u = compute_e_u(X_u, ssid_prime)
-    K = compute_K(X_s, P_s, e_s, x_u, e_u, p_u)
-    print("K", K)
-    SK_client = compute_SK(ssid_prime)
-    A_s_client = compute_As(ssid_prime)
+    K = compute_K(X_s, P_s, e_s, x_u, e_u, Fq(p_u))
+    SK_client = compute_SK(K, ssid_prime)
+    A_s_client = compute_As(K, ssid_prime)
+    print("SSID_p", ssid_prime)
+    print("A_s recu:", A_s)
+    print("A_s calculé:", A_s_client)
+    print("SK:", SK_client)
+    print(A_s == A_s_client)
     if A_s == A_s_client:
-        A_u = compute_Au(ssid_prime)
+        A_u = compute_Au(K, ssid_prime)
 
         soc.send(A_u.encode())
         print("OK")

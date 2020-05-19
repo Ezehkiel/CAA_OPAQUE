@@ -85,7 +85,7 @@ def compute_c(key):
     cipher = AES.new(key, AES.MODE_CTR, nonce=bytearray(1))
     # On concatène avec des séparateurs les datas que on veut chiffrer pour pouvoir les récuperer après
     data = str(p_u) + ";" + str(P_u[0]) + "," + str(P_u[1]) + ";" + str(P_s[0]) + "," + str(P_s[1])
-
+    print("Data:", data)
     secret = "YWEyZTk2NThhYzhjMjE0MmQ5YTljMzY4NDA5OTBjNzEzMjJhNDM0YThmNWIxMDRm"
     c = cipher.encrypt(data.encode())
     h = HMAC.new(secret.encode(), digestmod=SHA256)
@@ -183,18 +183,17 @@ def compute_e_s(_X_s, _ssid_prim):
 
 def compute_prf(value, prime, K):
     data = str(value) + b2a_hex(prime).decode()
+    print("Data prf", data)
+
     h = HMAC.new(K, digestmod=SHA256)
     h.update(data.encode())
     return h.hexdigest()
 
 
 def compute_K(X_u, P_u, e_u, x_s, e_s, p_s):
-    print("e_u", e_u)
-    print("e_s", e_s)
 
-    KE = ((P_u * e_u.lift()) + X_u) * (x_s + (e_s * p_s)).lift()
+    KE = ((P_u * e_u.lift()) + X_u) * (x_s + (e_s.lift() * p_s)).lift()
     x, y = pad(bin(KE[0]), bin(KE[1]))
-    print("Ke point", KE)
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
 
@@ -226,7 +225,7 @@ def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
         file_info = fetch_in_file()
         P_u_coords = file_info[4]
         P_u = EC(FF(P_u_coords.split(',')[0]), FF(P_u_coords.split(',')[1]))
-        p_s = Integer(file_info[2])
+        p_s = Fq(Integer(file_info[2]))
         x_s = Fq.random_element()
         X_s = x_s.lift() * g
         beta = alpha * Fq(file_info[1]).lift()
@@ -234,9 +233,11 @@ def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
         e_u = compute_e_u(X_u, ssid_prime)
         e_s = compute_e_s(X_s, ssid_prime)
         K = compute_K(X_u, P_u, e_u, x_s, e_s, p_s)
-        print("K", K)
         SK = compute_SK(K, ssid_prime)
         A_s = compute_As(K, ssid_prime)
+        print("SSID_p", ssid_prime)
+        print("A_s:", A_s)
+        print("SK:", SK)
         return_payload = "{}${}${}${}".format("{},{}".format(str(beta[0]), str(beta[1])),
                                               "{},{}".format(str(X_s[0]), str(X_s[1])), file_info[5], A_s)
 
@@ -253,6 +254,7 @@ def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
         if A_u == input_from_client:
             print("OK")
         else:
+            print("Le jeu")
             raise
 
     except Exception as e:
