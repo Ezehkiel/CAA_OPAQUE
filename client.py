@@ -41,16 +41,14 @@ X_u = x_u.lift() * g
 
 
 def pad(x, y):
+    # on enlève 0b de la string
     x = x[2:]
     y = y[2:]
-    diff = abs(len(x) - len(y))
-    if not diff:
-        return x, y
 
-    if len(x) > len(y):
-        return x, ('0' * diff) + y
-    elif len(x) < len(y):
-        return ('0' * diff) + x, y
+    diff_x = 256 - len(x)
+    diff_y = 256 - len(y)
+
+    return ('0' * diff_x) + x, ('0' * diff_y) + y
 
 
 def compute_alpha(password):
@@ -71,7 +69,9 @@ def get_beta_X_s_c_A_s(payload):
         beta = EC(FF(beta_points[0]), FF(beta_points[1]))
         X_s = EC(FF(X_s_points[0]), FF(X_s_points[1]))
         return beta, X_s, c, A_s
-    except TypeError:
+    except Exception as e:
+        print("lejeu")
+        print(str(e))
         raise
 
 
@@ -79,45 +79,56 @@ def compute_rw(_beta):
     beta_calc = _beta * (1 / r).lift()
 
     x, y = pad(bin(beta_calc[0]), bin(beta_calc[1]))
-    x_y = x + y
-    x_y = int(x_y, base=2)
+    bytearray_x = bytearray(bitstring_to_bytes(x))
+    bytearray_y = bytearray(bitstring_to_bytes(y))
 
-    password_bin = ' '.join(format(ord(x), 'b') for x in PWD).replace(" ", "")
-    padded_password, padded_beta = pad(bin(int(password_bin, base=2)), bin(x_y))
+    bytearray_password = bytearray(PWD.encode())
+
     blk2 = BLAKE2b.new(digest_bits=256)
-    blk2.update((padded_password + padded_beta).encode())
-    rw = blk2.hexdigest()
-
-    rw = bin(Integer('0x' + rw))
-    missing_bit = 256 - len(rw[2:])
-    rw = ('0' * missing_bit) + rw[2:]
-
+    blk2.update(bytearray_password + bytearray_x + bytearray_y)
+    rw = blk2.digest()
     return rw
 
 
+# TODO Deriver deux clé à l'aide de rw avec la même logique que SK ou A_s + On peut mettre le nonce à 0 vu que c'est du one time pad. ça fait que on a pas besoin de l'envoyer/stocker
 def decrypt_c(rw, c):
     values = c.split(",")
     data = values[0]
     mac = values[1]
-    nonce = values[2]
 
     secret = "YWEyZTk2NThhYzhjMjE0MmQ5YTljMzY4NDA5OTBjNzEzMjJhNDM0YThmNWIxMDRm"
     h = HMAC.new(secret.encode(), digestmod=SHA256)
     h.update(a2b_hex(data))
     try:
         h.hexverify(mac)
-        cipher = AES.new(bitstring_to_bytes(rw), AES.MODE_CTR, nonce=a2b_hex(nonce))
+        cipher = AES.new(rw, AES.MODE_CTR, nonce=bytearray(1))
         plaintext = cipher.decrypt(a2b_hex(data))
-        return plaintext
+        return plaintext.decode()
     except ValueError:
+        print("perdu")
         raise
+
+
+def parse_c(data):
+    values = data.split(";")
+    p_u = Integer(values[0])
+    P_u = new_point_from_coord(values[1])
+    P_s = new_point_from_coord(values[2])
+
+    print("p_u", p_u)
+    print("P_u", P_u)
+    print("P_s", P_s)
+
+    return p_u, P_u, P_s
+
+
+def new_point_from_coord(string):
+    return EC(FF(string.split(',')[0]), FF(string.split(',')[1]))
 
 
 def compute_ssid_prime(sid, ssid, alpha):
     # on va passer le sid et le ssid en binaire et on va padder jusqu'a 128, cela laisse des pareametre de 16 characters
-    sid_bin = format(sid, "0128b")
-    ssid_bin = ' '.join('{0:08b}'.format(ord(x), 'b') for x in ssid).replace(" ", "")
-
+    ssid_bin = ''.join('{0:08b}'.format(ord(x), 'b') for x in ssid)
     if len(ssid_bin) < 128:
         diff = 128 - len(ssid_bin)
         ssid_bin = '0' * diff + ssid_bin
@@ -126,11 +137,15 @@ def compute_ssid_prime(sid, ssid, alpha):
     alpha_y = alpha[1]
 
     x, y = pad(bin(alpha_x), bin(alpha_y))
+    bytearray_x = bytearray(bitstring_to_bytes(x))
+    bytearray_y = bytearray(bitstring_to_bytes(y))
+    bytearray_ssid = bytearray(bitstring_to_bytes(ssid_bin))
+    bytearray_sid = bytearray(sid.to_bytes(16, byteorder='big'))
 
     blk2 = BLAKE2b.new(digest_bits=256)
-    blk2.update((sid_bin + ssid_bin + x + y).encode())
+    blk2.update(bytearray_sid + bytearray_ssid + bytearray_x + bytearray_y)
 
-    return blk2.hexdigest()
+    return blk2.digest()
 
 
 def compute_e_u(_X_u, _ssid_prim):
@@ -139,55 +154,51 @@ def compute_e_u(_X_u, _ssid_prim):
 
     x, y = pad(bin(_X_u_x), bin(_X_u_y))
 
-    # On transforme le ID_SERVER en binaire
-    server_id_bin = ' '.join('{0:08b}'.format(ord(x), 'b') for x in ID_SERVER).replace(" ", "")
-    # On regarde s'il manque des 0 devant
-    if len(server_id_bin) < 128:
-        # S'il en manque on les ajoute
-        diff = 128 - len(server_id_bin)
-        server_id_bin = '0' * diff + server_id_bin
-
-    # _ssid_prime est une string donc on le passe en Integer puis on veut sa forme binaire
-    # Une fois en binaire il faut ajouter les 0 qui n'apparaisse pas devant
-    _ssid_prim = bin(Integer('0x' + _ssid_prim))
-    # On regarde combien de 0 il manque devant
-    missing_bit = 256 - len(_ssid_prim[2:])
-    # On ajouter les 0 manquant
-    _ssid_prim = ('0' * missing_bit) + _ssid_prim[2:]
+    bytearray_ssid_prime = bytearray(_ssid_prim)
+    bytearray_x = bytearray(bitstring_to_bytes(x))
+    bytearray_y = bytearray(bitstring_to_bytes(y))
 
     blk2 = BLAKE2b.new(digest_bits=256)
-    blk2.update((x + y + server_id_bin + _ssid_prim).encode())
+    blk2.update(bytearray_x + bytearray_y + bytearray_ssid_prime)
     # On creer un Integer depuis notre hexa puis on fait modulo q
     return Fq(Integer('0x' + blk2.hexdigest()))
-    # return Integer('0x' +blk2.hexdigest())
 
 
-def compute_e_s(_X_s, _ssid_prim, _sid):
+def compute_e_s(_X_s, _ssid_prim):
     _X_s_x = _X_s[0]
     _X_s_y = _X_s[1]
 
     x, y = pad(bin(_X_s_x), bin(_X_s_y))
 
-    # On transforme le ID_SERVER en binaire
-    sid_bin = format(_sid, "0128b")
-
-    # _ssid_prime est une string donc on le passe en Integer puis on veut sa forme binaire
-    # Une fois en binaire il faut ajouter les 0 qui n'apparaisse pas devant
-    _ssid_prim = bin(Integer('0x' + _ssid_prim))
-    # On regarde combien de 0 il manque devant
-    missing_bit = 256 - len(_ssid_prim[2:])
-    # On ajouter les 0 manquant
-    _ssid_prim = ('0' * missing_bit) + _ssid_prim[2:]
+    bytearray_ssid_prime = bytearray(_ssid_prim)
+    bytearray_x = bytearray(bitstring_to_bytes(x))
+    bytearray_y = bytearray(bitstring_to_bytes(y))
 
     blk2 = BLAKE2b.new(digest_bits=256)
-    blk2.update((x + y + sid_bin + _ssid_prim).encode())
+    blk2.update(bytearray_x + bytearray_y + bytearray_ssid_prime)
     # On creer un Integer depuis notre hexa puis on fait modulo q
     return Fq(Integer('0x' + blk2.hexdigest()))
 
 
+def compute_K(X_s, P_s, e_s, x_u, e_u, p_u):
+    print("e_u", e_u)
+    print("e_s", e_s)
+    print(P_s)
+
+    KE = ((P_s * e_s.lift()) + X_s) * (x_u + (e_u * p_u)).lift()
+    x, y = pad(bin(KE[0]), bin(KE[1]))
+    print("Ke point", KE)
+    bytearray_x = bytearray(bitstring_to_bytes(x))
+    bytearray_y = bytearray(bitstring_to_bytes(y))
+
+    blk2 = BLAKE2b.new(digest_bits=256)
+    blk2.update(bytearray_x + bytearray_y)
+    return blk2.digest()
+
+
 def compute_prf(value, prime):
     secret = "YWEyZTk2NThhYzhjMjE0MmQ5YTljMzY4NDA5OTBjNzEzMjJhNDM0YThmNWIxMDRm"
-    data = str(value) + prime
+    data = str(value) + b2a_hex(prime).decode()
     h = HMAC.new(secret.encode(), digestmod=SHA256)
     h.update(data.encode())
     return h.hexdigest()
@@ -229,9 +240,12 @@ try:
     beta, X_s, c, A_s = get_beta_X_s_c_A_s(result_string)
     rw = compute_rw(beta)
     plaintext = decrypt_c(rw, c)
-    ssid_prime = compute_ssid_prime(0, SSID, alpha)
-    e_s = compute_e_s(X_s, ssid_prime, 0)
+    p_u, P_s, P_u = parse_c(plaintext)
+    ssid_prime = compute_ssid_prime(1, SSID, alpha)
+    e_s = compute_e_s(X_s, ssid_prime)
     e_u = compute_e_u(X_u, ssid_prime)
+    K = compute_K(X_s, P_s, e_s, x_u, e_u, p_u)
+    print("K", K)
     SK_client = compute_SK(ssid_prime)
     A_s_client = compute_As(ssid_prime)
     if A_s == A_s_client:
@@ -241,7 +255,8 @@ try:
         print("OK")
     else:
         print("Error")
-except:
+except Exception as e:
+    print(str(e))
     print("Error")
     exit(1)
 finally:
