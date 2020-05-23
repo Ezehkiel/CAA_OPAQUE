@@ -41,15 +41,34 @@ P_s = p_s.lift() * g
 P_u = p_u.lift() * g
 
 
-def pad(x, y):
-    # on enlève 0b de la string
-    x = x[2:]
-    y = y[2:]
+def pad(point):
+    x = bin(point[0])[2:]
+    y = bin(point[1])[2:]
 
     diff_x = 256 - len(x)
     diff_y = 256 - len(y)
 
     return ('0' * diff_x) + x, ('0' * diff_y) + y
+
+
+def bitstring_to_bytes(s):
+    v = int(s, 2)
+    b = bytearray()
+    while v:
+        b.append(v & 0xff)
+        v >>= 8
+    return bytes(b[::-1])
+
+
+def is_point_on_G(point):
+    # On vérifie que alpha n'est pas le point à l'infinie et que q*alpha soit le point à l'infinie
+    if point.is_zero() and not (qq * point).is_zero():
+        return False
+    return True
+
+
+def new_point_from_coord(string):
+    return EC(FF(string.split(',')[0]), FF(string.split(',')[1]))
 
 
 def compute_rw():
@@ -58,11 +77,9 @@ def compute_rw():
     blk2.update(PWD.encode())
     # On calcule H' (ks * H(pwd) * g)
     H_prime = (k_s * Integer("0x" + blk2.hexdigest())).lift() * g
-    H_prime_x = H_prime[0]
-    H_prime_y = H_prime[1]
 
     # On fait en sorte que x et y de H' soient de la même taille en les paddant
-    x, y = pad(bin(H_prime_x), bin(H_prime_y))
+    x, y = pad(H_prime)
 
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
@@ -88,7 +105,7 @@ def compute_c(key):
     # KDF on calcule une fois avec 0 et une fois avec 1. Pour le sel la documentation
     # conseille quelque chose d'une longueur de 16bytes qui n'a pas besoin d'être secret
     # c'est pourquoi j'ai choisi de prendre le SSID car le client doit aussi connaitre le sel
-    key_aes = scrypt('\x00'.encode() + key,SSID, 32, N=2 ** 14, r=8, p=1)
+    key_aes = scrypt('\x00'.encode() + key, SSID, 32, N=2 ** 14, r=8, p=1)
     key_hmac = scrypt('\x01'.encode() + key, SSID, 32, N=2 ** 14, r=8, p=1)
 
     cipher = AES.new(key_aes, AES.MODE_CTR, nonce=bytearray(1))
@@ -127,8 +144,8 @@ def get_alpha_and_x_u(payload):
     try:
         # On construit les points à l'aide des valeurs reçues. Si les coords ne sont pas sur la courbe
         # cela va creer une exception
-        X_u = EC(FF(X_u_points[0]), FF(X_u_points[1]))
-        alpha = EC(FF(alpha_points[0]), FF(alpha_points[1]))
+        X_u = new_point_from_coord(values[0])
+        alpha = new_point_from_coord(values[1])
         # On vérifie que alpha n'est pas le point à l'infinie et que q*alpha soit le point à l'infinie
         if alpha.is_zero() and not (qq * alpha).is_zero():
             raise TypeError
@@ -167,10 +184,8 @@ def compute_ssid_prime(sid, ssid, alpha):
         diff = 128 - len(ssid_bin)
         ssid_bin = '0' * diff + ssid_bin
 
-    alpha_x = alpha[0]
-    alpha_y = alpha[1]
     # On fait en sorte que x et y soit sur 256 bit
-    x, y = pad(bin(alpha_x), bin(alpha_y))
+    x, y = pad(alpha)
 
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
@@ -183,22 +198,19 @@ def compute_ssid_prime(sid, ssid, alpha):
     return blk2.digest()
 
 
-#TODO faire une seule methode avec e_u et e_s
-def compute_e_u(_X_u, _ssid_prim):
+def compute_e_u_or_e_s(point, prim):
     """
-    Cette méthode va calculer e_u
-    :param _X_u: X_u
-    :param _ssid_prim:  ssid'
+    Cette méthode va calculer e_u ou e_s
+    :param point: X_u
+    :param prim:  ssid'
     :return: e_u
     """
-    _X_u_x = _X_u[0]
-    _X_u_y = _X_u[1]
 
     # On fait en sorte que x et y soient sur 256 bit
-    x, y = pad(bin(_X_u_x), bin(_X_u_y))
+    x, y = pad(point)
 
     # On transforme tout en bytearray
-    bytearray_ssid_prime = bytearray(_ssid_prim)
+    bytearray_ssid_prime = bytearray(prim)
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
 
@@ -208,28 +220,29 @@ def compute_e_u(_X_u, _ssid_prim):
     return Fq(Integer('0x' + blk2.hexdigest()))
 
 
-def compute_e_s(_X_s, _ssid_prim):
+def compute_K(X_u, P_u, e_u, x_s, e_s, p_s):
     """
-    Cette methode calcule e_s
-    :param _X_s: X_s du serveur
-    :param _ssid_prim: ssid' de la session
-    :return: e_s
+    Calcule de K (HMQV)
+    :param X_u: X_u du client
+    :param P_u: Private key du client
+    :param e_u: e_u de la session
+    :param x_s: x_s du serveur
+    :param e_s: e_s de la session
+    :param p_s: public key du serveur
+    :return:
     """
-    _X_s_x = _X_s[0]
-    _X_s_y = _X_s[1]
+    if not is_point_on_G(X_u) or not is_point_on_G(P_u):
+        raise TypeError
 
-    # On fait en sorte que x et y soient sur 256 bit
-    x, y = pad(bin(_X_s_x), bin(_X_s_y))
-
-    # On transforme tout en bytearray
-    bytearray_ssid_prime = bytearray(_ssid_prim)
+    KE = ((P_u * e_u.lift()) + X_u) * (x_s + (e_s * p_s)).lift()
+    # On fait en sorte que x et y soient de la même longueur (256 bits)
+    x, y = pad(KE)
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
 
     blk2 = BLAKE2b.new(digest_bits=256)
-    blk2.update(bytearray_x + bytearray_y + bytearray_ssid_prime)
-    # On creer un Integer depuis notre hexa puis on fait modulo q
-    return Fq(Integer('0x' + blk2.hexdigest()))
+    blk2.update(bytearray_x + bytearray_y)
+    return blk2.digest()
 
 
 def compute_prf(value, prime, K):
@@ -247,41 +260,6 @@ def compute_prf(value, prime, K):
     return h.hexdigest()
 
 
-def compute_K(X_u, P_u, e_u, x_s, e_s, p_s):
-    """
-    Calcule de K (HMQV)
-    :param X_u: X_u du client
-    :param P_u: Private key du client
-    :param e_u: e_u de la session
-    :param x_s: x_s du serveur
-    :param e_s: e_s de la session
-    :param p_s: public key du serveur
-    :return:
-    """
-
-    KE = ((P_u * e_u.lift()) + X_u) * (x_s + (e_s * p_s)).lift()
-    # On fait en sorte que x et y soient de la même longueur (256 bits)
-    x, y = pad(bin(KE[0]), bin(KE[1]))
-    bytearray_x = bytearray(bitstring_to_bytes(x))
-    bytearray_y = bytearray(bitstring_to_bytes(y))
-
-    blk2 = BLAKE2b.new(digest_bits=256)
-    blk2.update(bytearray_x + bytearray_y)
-    return blk2.digest()
-
-
-def compute_SK(K, prime):
-    return compute_prf(0, prime, K)
-
-
-def compute_As(K, prime):
-    return compute_prf(1, prime, K)
-
-
-def compute_Au(K, prime):
-    return compute_prf(2, prime, K)
-
-
 def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
     # the input is in bytes, so decode it
     input_from_client_bytes = conn.recv(MAX_BUFFER_SIZE)
@@ -289,6 +267,7 @@ def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
     # decode input and strip the end of line
     input_from_client = input_from_client_bytes.decode("utf8").rstrip()
     try:
+        """ Phase 1 server"""
         X_u, alpha = get_alpha_and_x_u(input_from_client)
         file_info = fetch_in_file()
         P_u_coords = file_info[4]
@@ -298,30 +277,31 @@ def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
         X_s = x_s.lift() * g
         beta = alpha * Fq(file_info[1]).lift()
         ssid_prime = compute_ssid_prime(1, SSID, alpha)  # 1 is the user 1
-        e_u = compute_e_u(X_u, ssid_prime)
-        e_s = compute_e_s(X_s, ssid_prime)
+        # C alcul de e_u
+        e_u = compute_e_u_or_e_s(X_u, ssid_prime)
+        # Calcul de e_s
+        e_s = compute_e_u_or_e_s(X_s, ssid_prime)
         K = compute_K(X_u, P_u, e_u, x_s, e_s, p_s)
-        SK = compute_SK(K, ssid_prime)
-        A_s = compute_As(K, ssid_prime)
+        SK = compute_prf(0, ssid_prime, K)
+        A_s = compute_prf(1, ssid_prime, K)
         return_payload = "{}${}${}${}".format("{},{}".format(str(beta[0]), str(beta[1])),
                                               "{},{}".format(str(X_s[0]), str(X_s[1])), file_info[5], A_s)
 
         vysl = return_payload.encode("utf8")  # encode the result string
         conn.sendall(vysl)  # send it to client
 
+        """ Phase 2 server """
         # the input is in bytes, so decode it
         input_from_client_bytes = conn.recv(MAX_BUFFER_SIZE)
-
         # decode input and strip the end of line
         input_from_client = input_from_client_bytes.decode("utf8").rstrip()
-        A_u = compute_Au(K, ssid_prime)
+        A_u = compute_prf(2, ssid_prime, K)
         if A_u == input_from_client:
             print("OK")
         else:
             raise TypeError
 
-    except Exception as e:
-        print(str(e))
+    except Exception:
         print("Error")
         exit(1)
     finally:
@@ -336,7 +316,7 @@ def start_server():
     print('Socket created')
 
     try:
-        soc.bind(("127.0.0.1", 12345))
+        soc.bind(("127.0.0.1", 12346))
         print('Socket bind complete')
     except socket.error as msg:
         import sys
@@ -352,15 +332,6 @@ def start_server():
     print('Accepting connection from ' + ip + ':' + port)
     client(conn, ip, port)
     soc.close()
-
-
-def bitstring_to_bytes(s):
-    v = int(s, 2)
-    b = bytearray()
-    while v:
-        b.append(v & 0xff)
-        v >>= 8
-    return bytes(b[::-1])
 
 
 c_final, c_mac = compute_c(compute_rw())

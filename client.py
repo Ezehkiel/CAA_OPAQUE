@@ -5,6 +5,8 @@ from Crypto.Hash import BLAKE2b, HMAC, SHA256
 from Crypto.Cipher import AES
 from binascii import a2b_hex, b2a_hex
 
+
+
 PWD = "password"
 SSID = "YWM0MjEwYzkxNzll"
 
@@ -39,6 +41,8 @@ x_u = Fq.random_element()
 
 X_u = x_u.lift() * g
 
+from server import qq, EC, FF
+
 
 def pad(x, y):
     # on enlève 0b de la string
@@ -49,6 +53,26 @@ def pad(x, y):
     diff_y = 256 - len(y)
 
     return ('0' * diff_x) + x, ('0' * diff_y) + y
+
+
+def bitstring_to_bytes(s):
+    v = int(s, 2)
+    b = bytearray()
+    while v:
+        b.append(v & 0xff)
+        v >>= 8
+    return bytes(b[::-1])
+
+
+def is_point_on_G(point):
+    # On vérifie que alpha n'est pas le point à l'infinie et que q*alpha soit le point à l'infinie
+    if point.is_zero() and not (qq * point).is_zero():
+        return False
+    return True
+
+
+def new_point_from_coord(string):
+    return EC(FF(string.split(',')[0]), FF(string.split(',')[1]))
 
 
 def compute_alpha(password):
@@ -127,10 +151,6 @@ def parse_c(data):
     return p_u, P_u, P_s
 
 
-def new_point_from_coord(string):
-    return EC(FF(string.split(',')[0]), FF(string.split(',')[1]))
-
-
 def compute_ssid_prime(sid, ssid, alpha):
     # on va passer le sid et le ssid en binaire et on va padder jusqu'a 128, cela laisse des pareametre de 16 characters
     ssid_bin = ''.join('{0:08b}'.format(ord(x), 'b') for x in ssid)
@@ -153,29 +173,21 @@ def compute_ssid_prime(sid, ssid, alpha):
     return blk2.digest()
 
 
-def compute_e_u(_X_u, _ssid_prim):
-    _X_u_x = _X_u[0]
-    _X_u_y = _X_u[1]
+def compute_e_u_or_e_s(point, prim):
+    """
+    Cette méthode va calculer e_u ou e_s
+    :param point: X_u
+    :param prim:  ssid'
+    :return: e_u
+    """
+    point_x = point[0]
+    point_y = point[1]
 
-    x, y = pad(bin(_X_u_x), bin(_X_u_y))
+    # On fait en sorte que x et y soient sur 256 bit
+    x, y = pad(bin(point_x), bin(point_y))
 
-    bytearray_ssid_prime = bytearray(_ssid_prim)
-    bytearray_x = bytearray(bitstring_to_bytes(x))
-    bytearray_y = bytearray(bitstring_to_bytes(y))
-
-    blk2 = BLAKE2b.new(digest_bits=256)
-    blk2.update(bytearray_x + bytearray_y + bytearray_ssid_prime)
-    # On creer un Integer depuis notre hexa puis on fait modulo q
-    return Fq(Integer('0x' + blk2.hexdigest()))
-
-
-def compute_e_s(_X_s, _ssid_prim):
-    _X_s_x = _X_s[0]
-    _X_s_y = _X_s[1]
-
-    x, y = pad(bin(_X_s_x), bin(_X_s_y))
-
-    bytearray_ssid_prime = bytearray(_ssid_prim)
+    # On transforme tout en bytearray
+    bytearray_ssid_prime = bytearray(prim)
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
 
@@ -186,13 +198,8 @@ def compute_e_s(_X_s, _ssid_prim):
 
 
 def compute_K(X_s, P_s, e_s, x_u, e_u, p_u):
-    print("e_u", e_u)
-    print("e_s", e_s)
-    print("X_s", X_s)
-    print("P_s", P_s)
-
-    print("X_u = ", x_u.lift()*g)
-    print("P_u = ", p_u.lift()*g)
+    if not is_point_on_G(X_s) or not is_point_on_G(P_s):
+        raise TypeError
 
     KE = ((P_s * e_s.lift()) + X_s) * (x_u + (e_u * p_u)).lift()
     x, y = pad(bin(KE[0]), bin(KE[1]))
@@ -213,29 +220,8 @@ def compute_prf(value, prime, K):
     return h.hexdigest()
 
 
-def compute_SK(K, prime):
-    return compute_prf(0, prime, K)
-
-
-def compute_As(K, prime):
-    return compute_prf(1, prime, K)
-
-
-def compute_Au(K, prime):
-    return compute_prf(2, prime, K)
-
-
-def bitstring_to_bytes(s):
-    v = int(s, 2)
-    b = bytearray()
-    while v:
-        b.append(v & 0xff)
-        v >>= 8
-    return bytes(b[::-1])
-
-
 soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-soc.connect(("127.0.0.1", 12345))
+soc.connect(("127.0.0.1", 12346))
 
 # p = input("Enter your password please\n")
 alpha = compute_alpha(PWD)
@@ -251,25 +237,21 @@ try:
     plaintext = decrypt_c(rw, c)
     p_u, P_u, P_s = parse_c(plaintext)
     ssid_prime = compute_ssid_prime(1, SSID, alpha)
-    e_s = compute_e_s(X_s, ssid_prime)
-    e_u = compute_e_u(X_u, ssid_prime)
+    # C alcul de e_u
+    e_u = compute_e_u_or_e_s(X_u, ssid_prime)
+    # Calcul de e_s
+    e_s = compute_e_u_or_e_s(X_s, ssid_prime)
     K = compute_K(X_s, P_s, e_s, x_u, e_u, Fq(p_u))
-    SK_client = compute_SK(K, ssid_prime)
-    A_s_client = compute_As(K, ssid_prime)
-    print("SSID_p", ssid_prime)
-    print("A_s recu:", A_s)
-    print("A_s calculé:", A_s_client)
-    print("SK:", SK_client)
-    print(A_s == A_s_client)
-    if A_s == A_s_client:
-        A_u = compute_Au(K, ssid_prime)
+    SK_client = compute_prf(0, ssid_prime, K)
+    A_s_client = compute_prf(0, ssid_prime, K)
 
+    if A_s == A_s_client:
+        A_u = compute_prf(0, ssid_prime, K)
         soc.send(A_u.encode())
         print("OK")
     else:
         print("Error")
-except Exception as e:
-    print(str(e))
+except Exception:
     print("Error")
     exit(1)
 finally:
