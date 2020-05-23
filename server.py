@@ -7,7 +7,7 @@ from binascii import b2a_hex
 
 # tow = 128
 SSID = "YWM0MjEwYzkxNzll"
-PWD = "password"
+PWD = "OGQ0MDM3MjAyNTNmYjY5Zjc5ODU2ZmI1M2ZiNTIzY2ZhNDYzMjZjNDU3NjQ5MmIx"
 # secp256r1
 # https://kel.bz/post/sage-p256/
 # Finite field prime
@@ -33,15 +33,18 @@ EC.set_order(qq)
 
 g = EC(FF(gx), FF(gy))
 
-k_s = Fq.random_element()
-p_s = Fq.random_element()
-p_u = Fq.random_element()
 
-P_s = p_s.lift() * g
-P_u = p_u.lift() * g
-
+##########################################################
+##################### Methode utiles #####################
+##########################################################
 
 def pad(point):
+    """
+    Cette méthode va prendre les coordonnées d'un point, les mettre en
+    binaire et ajouter des 0 pour avoir une taille de 256bits (512 total
+    :param point:
+    :return:
+    """
     x = bin(point[0])[2:]
     y = bin(point[1])[2:]
 
@@ -52,6 +55,13 @@ def pad(point):
 
 
 def bitstring_to_bytes(s):
+    """
+    Cette méthode permet de transformer une string binaire en byte
+    https://stackoverflow.com/questions/32675679/convert-binary-string-to-bytearray-in-python-3
+    :param s: la chaine a transformer
+    :return: la chaine mais en bytes
+    """
+
     v = int(s, 2)
     b = bytearray()
     while v:
@@ -61,6 +71,13 @@ def bitstring_to_bytes(s):
 
 
 def is_point_on_G(point):
+    """
+    Cette méthode va vérifier que le point donné appartienne bien
+    à la courbe
+    :param point: le point à tester
+    :return: vrai si le point est sur la courbe, faux sinon
+    """
+
     # On vérifie que alpha n'est pas le point à l'infinie et que q*alpha soit le point à l'infinie
     if point.is_zero() and not (qq * point).is_zero():
         return False
@@ -68,10 +85,36 @@ def is_point_on_G(point):
 
 
 def new_point_from_coord(string):
+    """
+    Cette méthode va prendre un string du forma coord_x,coord_y et va en faire un point
+    :param string: les coordonnées séparé par une virgule
+    :return: un nouveau point de la courbe
+    """
     return EC(FF(string.split(',')[0]), FF(string.split(',')[1]))
 
 
-def compute_rw():
+##########################################################
+##################### Methode OPAQUE #####################
+##########################################################
+
+def registration():
+    """Phase d'enregistrement"""
+    k_s = Fq.random_element()
+    p_s = Fq.random_element()
+    p_u = Fq.random_element()
+
+    P_s = p_s.lift() * g
+    P_u = p_u.lift() * g
+
+    c_final, c_mac = compute_c(compute_rw(k_s), p_u, P_u, P_s)
+    write_file(c_final, c_mac, 1, k_s, p_s, P_s, P_u)  # 1 is the user id
+
+
+def compute_rw(k_s):
+    """
+    Cette méthode va calculer rw en fonction du password
+    :return: rw en format digest
+    """
     # On hash le password
     blk2 = BLAKE2b.new(digest_bits=256)
     blk2.update(PWD.encode())
@@ -86,6 +129,7 @@ def compute_rw():
 
     # On passe le password en byrearray pour le concatener avec x et y de H'
     bytearray_password = bytearray(PWD.encode())
+
     data = bytearray_password + bytearray_x + bytearray_y
 
     blk2 = BLAKE2b.new(digest_bits=256)
@@ -94,10 +138,10 @@ def compute_rw():
     return rw
 
 
-def compute_c(key):
+def compute_c(key, p_u, P_u, P_s):
     """
     Cette methode va concatener certaines infos généré pour un certain client puis le chiffrer.
-    On utiliser AES et HMAC, de ce fait il nous faut deux clés. On va donc utiliser une KDF.
+    On utilise AES et HMAC, de ce fait il nous faut deux clés. On va donc utiliser une KDF.
     :param key: master key qui sera utilisé pour générer les autres clés
     :return: le text chiffré ainsi que le mac
     """
@@ -117,7 +161,7 @@ def compute_c(key):
     return b2a_hex(c), h.hexdigest()
 
 
-def write_file(c_final, c_mac, id_user):
+def write_file(c_final, c_mac, id_user, k_s, p_s, P_s, P_u):
     """
     Sauvegarde les données dans un fichier pour pouvoir les récuperer plus tard
     :param c_final: le texte c chiffré
@@ -134,12 +178,10 @@ def write_file(c_final, c_mac, id_user):
 def get_alpha_and_x_u(payload):
     """
     Cette méthode va extraire les informations à l'aide de séparateur afin d'en extraire alpha et X_u
-    :param payload: la chaine de charactères entière
+    :param payload: la chaine de charactères
     :return: alpha et X_u sous forme de points
     """
     values = payload.split(";")
-    X_u_points = values[0].split(",")
-    alpha_points = values[1].split(",")
 
     try:
         # On construit les points à l'aide des valeurs reçues. Si les coords ne sont pas sur la courbe
@@ -154,7 +196,7 @@ def get_alpha_and_x_u(payload):
         raise
 
 
-def fetch_in_file(sid=1):
+def fetch_in_file(sid):
     """
     Lecture du fichier
     :param sid: l'id de l'utilisateur concerné
@@ -201,9 +243,9 @@ def compute_ssid_prime(sid, ssid, alpha):
 def compute_e_u_or_e_s(point, prim):
     """
     Cette méthode va calculer e_u ou e_s
-    :param point: X_u
-    :param prim:  ssid'
-    :return: e_u
+    :param point: le point qui va service pour le calcul
+    :param prim: ssid'
+    :return: e_u ou e_s
     """
 
     # On fait en sorte que x et y soient sur 256 bit
@@ -224,12 +266,12 @@ def compute_K(X_u, P_u, e_u, x_s, e_s, p_s):
     """
     Calcule de K (HMQV)
     :param X_u: X_u du client
-    :param P_u: Private key du client
+    :param P_u: Clé public du client
     :param e_u: e_u de la session
     :param x_s: x_s du serveur
     :param e_s: e_s de la session
-    :param p_s: public key du serveur
-    :return:
+    :param p_s: Clé privé du serveur
+    :return: la clé K
     """
     if not is_point_on_G(X_u) or not is_point_on_G(P_u):
         raise TypeError
@@ -260,18 +302,24 @@ def compute_prf(value, prime, K):
     return h.hexdigest()
 
 
-def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
-    # the input is in bytes, so decode it
-    input_from_client_bytes = conn.recv(MAX_BUFFER_SIZE)
+def login_phase(conn, ip, port, MAX_BUFFER_SIZE=4096):
+    """
+    Cette méthode va être executé pour chaque client qui se connect au server
+    :param conn: la connexion avec le client
+    :param ip: l'ip du client
+    :param port: le port du client
+    :param MAX_BUFFER_SIZE: la taille maximal du buffer d'input
+    """
 
-    # decode input and strip the end of line
-    input_from_client = input_from_client_bytes.decode("utf8").rstrip()
+    input_client_bytes = conn.recv(MAX_BUFFER_SIZE)
+    input_client = input_client_bytes.decode().rstrip()
+
     try:
         """ Phase 1 server"""
-        X_u, alpha = get_alpha_and_x_u(input_from_client)
-        file_info = fetch_in_file()
+        X_u, alpha = get_alpha_and_x_u(input_client)
+        file_info = fetch_in_file(1)  # 1 est l'id du user
         P_u_coords = file_info[4]
-        P_u = EC(FF(P_u_coords.split(',')[0]), FF(P_u_coords.split(',')[1]))
+        P_u = new_point_from_coord(P_u_coords)
         p_s = Fq(Integer(file_info[2]))
         x_s = Fq.random_element()
         X_s = x_s.lift() * g
@@ -291,19 +339,16 @@ def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
         conn.sendall(vysl)  # send it to client
 
         """ Phase 2 server """
-        # the input is in bytes, so decode it
-        input_from_client_bytes = conn.recv(MAX_BUFFER_SIZE)
-        # decode input and strip the end of line
-        input_from_client = input_from_client_bytes.decode("utf8").rstrip()
+        input_client_bytes = conn.recv(MAX_BUFFER_SIZE)
+        input_client = input_client_bytes.decode().rstrip()
         A_u = compute_prf(2, ssid_prime, K)
-        if A_u == input_from_client:
+        if A_u == input_client:
             print("OK")
         else:
             raise TypeError
 
-    except Exception:
+    except Exception as e:
         print("Error")
-        exit(1)
     finally:
         conn.close()
         print('Connection ' + ip + ':' + port + " ended")
@@ -326,15 +371,12 @@ def start_server():
     # Start listening on socket
     soc.listen(10)
     print('Socket now listening')
+    while True:
+        conn, addr = soc.accept()
+        ip, port = str(addr[0]), str(addr[1])
+        print('Accepting connection from ' + ip + ':' + port)
+        login_phase(conn, ip, port)
 
-    conn, addr = soc.accept()
-    ip, port = str(addr[0]), str(addr[1])
-    print('Accepting connection from ' + ip + ':' + port)
-    client(conn, ip, port)
-    soc.close()
 
-
-c_final, c_mac = compute_c(compute_rw())
-write_file(c_final, c_mac, 1)  # 1 is the user id
-
+registration()
 start_server()
