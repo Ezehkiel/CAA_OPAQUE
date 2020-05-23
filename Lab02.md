@@ -4,6 +4,10 @@
 
 Rémi Poulard, le 23.05.2020
 
+J'ai utilisé Sage 9 ainsi que pycryptodome. Pour développé j'ai utilisé PyCharm en sélectionnant l'interpréteur python de sage (python3.7).
+
+`pip install -r requirments.txt`
+
 #### Choix d'implémentation
 
 ##### Courbe elliptique
