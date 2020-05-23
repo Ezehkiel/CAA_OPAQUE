@@ -8,21 +8,21 @@ Rémi Poulard, le 23.05.2020
 
 ##### Courbe elliptique
 
-En ce qui concerne la courbe elliptique j'ai choisi de prendre la courbe `secp256r1`. J'ai choisi ce que recommandait l'ANSSI (sur le site keylength), c'est à dire 256bits. De plus, j'ai pensé que dans le cadre de ce laboratoire nous pouvions ne pas faire attention à la durée de vie des courbes (jusqu'à 2030 pour `secp256r1` apparemment), en production il serait peut-être plus "futur proof" de prendre la courbe de 384bits.
+En ce qui concerne la courbe elliptique j'ai choisi de prendre la courbe `secp256r1`. J'ai choisi ce que recommandait l'ANSSI (sur le site [keylength.com](https://keylength.com)), c'est à dire 256bits. De plus, j'ai pensé que dans le cadre de ce laboratoire nous pouvions ne pas faire attention à la durée de vie des courbes (jusqu'à 2030 pour `secp256r1` apparemment), en production il serait peut-être plus "futur proof" de prendre la courbe de 384bits.
 
-Le fait de choisir cette courbe m'a donc donné un paramètre τ d'une longueur de 128bit car |q| = 2τ
+Le fait de choisir cette courbe m'a donc donné un paramètre $\tau$ d'une longueur de 128bit car le nombre de bit de q doit être égal à 2$\tau$.
 
 ##### Authenc/AuthDec
 
-Pour cette partie nous devions faire en sorte que ce soit "random-key robust". D'après ce qui est noté dans le draft du protocole cette propriété peut être remplie en faisant un `encrypt-the-mac` ou en modifiant GCM par exemple. Dans mon cas j'ai choisi d'utiliser `encrypt-then-mac` avec AES et HMAC256. 
+Pour cette partie nous devions faire en sorte que ce soit "random-key robust". D'après ce qui est noté dans le draft du protocole cette propriété peut être remplie en faisant un `encrypt-then-mac` ou en modifiant GCM. Dans mon cas j'ai choisi d'utiliser `encrypt-then-mac` avec AES et HMAC256. 
 
 Pour le mode de AES j'ai choisi CTR car, comme expliqué [ici](https://web.cs.ucdavis.edu/~rogaway/papers/modes.pdf), CTR est très efficace lorsque l'on veux simplement chiffrer les données, ce qui est notre cas. Pour AES et HMAC la taille de la clé utilisé a été de 256 bits. La données nous dit que si l'on choisit AES nous pouvons mettre le nonce à 0 car il est utilisé une seule fois de toute manière.
 
 ##### Fonction de hashage H
 
-Pour la fonction de hashage j'ai choisi d'utiliser BLAKE2b car d'après le cours c'est un algorithme qui est valide dans le futur. De plus, il semble plus rapide que MD5, SHA1, SHA2 et SHA3 et aussi secure que SHA3.
+Pour la fonction de hashage j'ai choisi d'utiliser BLAKE2b car d'après le cours c'est un algorithme qui est valide dans le futur. De plus, il semble plus rapide que MD5, SHA1, SHA2 et SHA3 et aussi sûr que SHA3.
 
-Il a été possible de définir la taille de l'output de la fonction. D'après la figure donnée la taille de sortie devait être de 2τ, ce qui nous fait une sortie de 256 bits.
+Il a été possible de définir la taille de l'output de la fonction. D'après la figure donnée la taille de notre sortie devait être de 2τ, ce qui nous fait une sortie de 256 bits.
 
 ##### PRF
 
