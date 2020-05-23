@@ -1,3 +1,4 @@
+from Crypto.Protocol.KDF import scrypt
 from sage.all import Integers, GF, EllipticCurve, Integer
 import socket
 from Crypto.Hash import BLAKE2b, HMAC, SHA256
@@ -5,7 +6,6 @@ from Crypto.Cipher import AES
 from binascii import a2b_hex, b2a_hex
 
 PWD = "password"
-ID_SERVER = "MTI3MjExY2UyMTJi"
 SSID = "YWM0MjEwYzkxNzll"
 
 # tow = 128
@@ -90,18 +90,22 @@ def compute_rw(_beta):
     return rw
 
 
-# TODO Deriver deux clé à l'aide de rw avec la même logique que SK ou A_s + On peut mettre le nonce à 0 vu que c'est du one time pad. ça fait que on a pas besoin de l'envoyer/stocker
 def decrypt_c(rw, c):
     values = c.split(",")
     data = values[0]
     mac = values[1]
 
-    secret = "YWEyZTk2NThhYzhjMjE0MmQ5YTljMzY4NDA5OTBjNzEzMjJhNDM0YThmNWIxMDRm"
-    h = HMAC.new(secret.encode(), digestmod=SHA256)
+    # KDF on calcule une fois avec 0 et une fois avec 1. Pour le sel la documentation
+    # conseille quelque chose d'une longueur de 16bytes qui n'a pas besoin d'être secret
+    # c'est pourquoi j'ai choisi de prendre le SSID car le client doit aussi connaitre le sel
+    key_aes = scrypt('\x00'.encode() + rw, SSID, 32, N=2 ** 14, r=8, p=1)
+    key_hmac = scrypt('\x01'.encode() + rw, SSID, 32, N=2 ** 14, r=8, p=1)
+
+    h = HMAC.new(key_hmac, digestmod=SHA256)
     h.update(a2b_hex(data))
     try:
         h.hexverify(mac)
-        cipher = AES.new(rw, AES.MODE_CTR, nonce=bytearray(1))
+        cipher = AES.new(key_aes, AES.MODE_CTR, nonce=bytearray(1))
         plaintext = cipher.decrypt(a2b_hex(data))
         print("Plaintext: ", plaintext.decode())
         return plaintext.decode()
@@ -234,7 +238,7 @@ soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 soc.connect(("127.0.0.1", 12345))
 
 # p = input("Enter your password please\n")
-alpha = compute_alpha("password")
+alpha = compute_alpha(PWD)
 payload = "{};{}".format("{},{}".format(str(X_u[0]), str(X_u[1])), "{},{}".format(str(alpha[0]), str(alpha[1])))
 
 soc.send(payload.encode("utf8"))  # we must encode the string to bytes

@@ -1,12 +1,12 @@
+from Crypto.Protocol.KDF import scrypt
 from sage.all import Integers, GF, EllipticCurve, Integer
 import socket
 from Crypto.Hash import BLAKE2b, HMAC, SHA256
 from Crypto.Cipher import AES
-from binascii import a2b_hex, b2a_hex
+from binascii import b2a_hex
 
 # tow = 128
 SSID = "YWM0MjEwYzkxNzll"
-ID_SERVER = "MTI3MjExY2UyMTJi"
 PWD = "password"
 # secp256r1
 # https://kel.bz/post/sage-p256/
@@ -67,7 +67,7 @@ def compute_rw():
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
 
-    # On passe le password en binaire pour le concatener avec x et y de H'
+    # On passe le password en byrearray pour le concatener avec x et y de H'
     bytearray_password = bytearray(PWD.encode())
     data = bytearray_password + bytearray_x + bytearray_y
 
@@ -77,23 +77,36 @@ def compute_rw():
     return rw
 
 
-# TODO Deriver deux clé à l'aide de rw avec la même logique que SK ou A_s + On peut mettre le nonce à 0 vu que c'est du one time pad. ça fait que on a pas besoin de l'envoyer/stocker
 def compute_c(key):
-    print("p_u", p_u)
-    print("P_u", P_u)
-    print("P_s", P_s)
-    cipher = AES.new(key, AES.MODE_CTR, nonce=bytearray(1))
+    """
+    Cette methode va concatener certaines infos généré pour un certain client puis le chiffrer.
+    On utiliser AES et HMAC, de ce fait il nous faut deux clés. On va donc utiliser une KDF.
+    :param key: master key qui sera utilisé pour générer les autres clés
+    :return: le text chiffré ainsi que le mac
+    """
+
+    # KDF on calcule une fois avec 0 et une fois avec 1. Pour le sel la documentation
+    # conseille quelque chose d'une longueur de 16bytes qui n'a pas besoin d'être secret
+    # c'est pourquoi j'ai choisi de prendre le SSID car le client doit aussi connaitre le sel
+    key_aes = scrypt('\x00'.encode() + key,SSID, 32, N=2 ** 14, r=8, p=1)
+    key_hmac = scrypt('\x01'.encode() + key, SSID, 32, N=2 ** 14, r=8, p=1)
+
+    cipher = AES.new(key_aes, AES.MODE_CTR, nonce=bytearray(1))
     # On concatène avec des séparateurs les datas que on veut chiffrer pour pouvoir les récuperer après
     data = str(p_u) + ";" + str(P_u[0]) + "," + str(P_u[1]) + ";" + str(P_s[0]) + "," + str(P_s[1])
-    print("Data:", data)
-    secret = "YWEyZTk2NThhYzhjMjE0MmQ5YTljMzY4NDA5OTBjNzEzMjJhNDM0YThmNWIxMDRm"
     c = cipher.encrypt(data.encode())
-    h = HMAC.new(secret.encode(), digestmod=SHA256)
+    h = HMAC.new(key_hmac, digestmod=SHA256)
     h.update(c)
     return b2a_hex(c), h.hexdigest()
 
 
-def write_file(c_final, c_mac, id_user=0):
+def write_file(c_final, c_mac, id_user):
+    """
+    Sauvegarde les données dans un fichier pour pouvoir les récuperer plus tard
+    :param c_final: le texte c chiffré
+    :param c_mac: le mac de c
+    :param id_user: l'id de l'utilisateur
+    """
     f = open("secretfile.txt", "w")
     f.write("{};{};{};{};{};{}".format(id_user, str(k_s), str(p_s), "{},{}".format(str(P_s[0]), str(P_s[1])),
                                        "{},{}".format(str(P_u[0]), str(P_u[1])),
@@ -102,13 +115,21 @@ def write_file(c_final, c_mac, id_user=0):
 
 
 def get_alpha_and_x_u(payload):
+    """
+    Cette méthode va extraire les informations à l'aide de séparateur afin d'en extraire alpha et X_u
+    :param payload: la chaine de charactères entière
+    :return: alpha et X_u sous forme de points
+    """
     values = payload.split(";")
     X_u_points = values[0].split(",")
     alpha_points = values[1].split(",")
 
     try:
+        # On construit les points à l'aide des valeurs reçues. Si les coords ne sont pas sur la courbe
+        # cela va creer une exception
         X_u = EC(FF(X_u_points[0]), FF(X_u_points[1]))
         alpha = EC(FF(alpha_points[0]), FF(alpha_points[1]))
+        # On vérifie que alpha n'est pas le point à l'infinie et que q*alpha soit le point à l'infinie
         if alpha.is_zero() and not (qq * alpha).is_zero():
             raise TypeError
         return X_u, alpha
@@ -117,18 +138,30 @@ def get_alpha_and_x_u(payload):
 
 
 def fetch_in_file(sid=1):
+    """
+    Lecture du fichier
+    :param sid: l'id de l'utilisateur concerné
+    :return: un tableau avec toutes les valeurs de la ligne
+    """
     f = open("secretfile.txt", "r")
-    Lines = f.readlines()
+    lines = f.readlines()
 
-    # Strips the newline character
-    for line in Lines:
+    for line in lines:
         tokens = line.split(";")
+        # On regarde si la ligne est celle pour notre utilisateur, si c'est le cas on la return
         if tokens[0] == str(sid):
             return tokens
 
 
 def compute_ssid_prime(sid, ssid, alpha):
-    # on va passer le sid et le ssid en binaire et on va padder jusqu'a 128, cela laisse des pareametre de 16 characters
+    """
+    Cette méthode va calculer ssid'
+    :param sid: l'id de l'utilisateur courant
+    :param ssid: l'id de session courante
+    :param alpha: alpha reçu du client
+    :return: ssid'
+    """
+    # on va passer le ssid en binaire et on va padder jusqu'a 128, cela laisse des pareametre de 16 characters
     ssid_bin = ''.join('{0:08b}'.format(ord(x), 'b') for x in ssid)
     if len(ssid_bin) < 128:
         diff = 128 - len(ssid_bin)
@@ -136,8 +169,9 @@ def compute_ssid_prime(sid, ssid, alpha):
 
     alpha_x = alpha[0]
     alpha_y = alpha[1]
-
+    # On fait en sorte que x et y soit sur 256 bit
     x, y = pad(bin(alpha_x), bin(alpha_y))
+
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
     bytearray_ssid = bytearray(bitstring_to_bytes(ssid_bin))
@@ -149,12 +183,21 @@ def compute_ssid_prime(sid, ssid, alpha):
     return blk2.digest()
 
 
+#TODO faire une seule methode avec e_u et e_s
 def compute_e_u(_X_u, _ssid_prim):
+    """
+    Cette méthode va calculer e_u
+    :param _X_u: X_u
+    :param _ssid_prim:  ssid'
+    :return: e_u
+    """
     _X_u_x = _X_u[0]
     _X_u_y = _X_u[1]
 
+    # On fait en sorte que x et y soient sur 256 bit
     x, y = pad(bin(_X_u_x), bin(_X_u_y))
 
+    # On transforme tout en bytearray
     bytearray_ssid_prime = bytearray(_ssid_prim)
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
@@ -166,11 +209,19 @@ def compute_e_u(_X_u, _ssid_prim):
 
 
 def compute_e_s(_X_s, _ssid_prim):
+    """
+    Cette methode calcule e_s
+    :param _X_s: X_s du serveur
+    :param _ssid_prim: ssid' de la session
+    :return: e_s
+    """
     _X_s_x = _X_s[0]
     _X_s_y = _X_s[1]
 
+    # On fait en sorte que x et y soient sur 256 bit
     x, y = pad(bin(_X_s_x), bin(_X_s_y))
 
+    # On transforme tout en bytearray
     bytearray_ssid_prime = bytearray(_ssid_prim)
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
@@ -182,8 +233,14 @@ def compute_e_s(_X_s, _ssid_prim):
 
 
 def compute_prf(value, prime, K):
+    """
+    Cette méthode va calculer HMAC sur les données concaténées passées en paramètre
+    :param value: la valeur a concatener
+    :param prime: ssid' de la session
+    :param K: la clé utilisé par HMAC
+    :return:
+    """
     data = str(value) + b2a_hex(prime).decode()
-    print("Data prf", data)
 
     h = HMAC.new(K, digestmod=SHA256)
     h.update(data.encode())
@@ -191,8 +248,19 @@ def compute_prf(value, prime, K):
 
 
 def compute_K(X_u, P_u, e_u, x_s, e_s, p_s):
+    """
+    Calcule de K (HMQV)
+    :param X_u: X_u du client
+    :param P_u: Private key du client
+    :param e_u: e_u de la session
+    :param x_s: x_s du serveur
+    :param e_s: e_s de la session
+    :param p_s: public key du serveur
+    :return:
+    """
 
-    KE = ((P_u * e_u.lift()) + X_u) * (x_s + (e_s.lift() * p_s)).lift()
+    KE = ((P_u * e_u.lift()) + X_u) * (x_s + (e_s * p_s)).lift()
+    # On fait en sorte que x et y soient de la même longueur (256 bits)
     x, y = pad(bin(KE[0]), bin(KE[1]))
     bytearray_x = bytearray(bitstring_to_bytes(x))
     bytearray_y = bytearray(bitstring_to_bytes(y))
@@ -235,13 +303,9 @@ def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
         K = compute_K(X_u, P_u, e_u, x_s, e_s, p_s)
         SK = compute_SK(K, ssid_prime)
         A_s = compute_As(K, ssid_prime)
-        print("SSID_p", ssid_prime)
-        print("A_s:", A_s)
-        print("SK:", SK)
         return_payload = "{}${}${}${}".format("{},{}".format(str(beta[0]), str(beta[1])),
                                               "{},{}".format(str(X_s[0]), str(X_s[1])), file_info[5], A_s)
 
-        # print("Result of processing {} is: {}".format(input_from_client, res))
         vysl = return_payload.encode("utf8")  # encode the result string
         conn.sendall(vysl)  # send it to client
 
@@ -254,8 +318,7 @@ def client(conn, ip, port, MAX_BUFFER_SIZE=4096):
         if A_u == input_from_client:
             print("OK")
         else:
-            print("Le jeu")
-            raise
+            raise TypeError
 
     except Exception as e:
         print(str(e))
