@@ -1,9 +1,18 @@
-from Crypto.Protocol.KDF import scrypt
+__author__ = "Rémi Poulard"
+__copyright__ = "Copyright 2020, Rémi Poulard"
+__license__ = "GPL"
+__version__ = "1.0"
+__maintainer__ = "Rémi Poulard"
+__email__ = "remi.poulard@heig-vd.ch"
+__status__ = "Proof of concept"
+
 from sage.all import Integers, GF, EllipticCurve, Integer
-import socket
 from Crypto.Hash import BLAKE2b, HMAC, SHA256
 from Crypto.Cipher import AES
+from Crypto.Protocol.KDF import scrypt
 from binascii import b2a_hex
+
+import socket
 
 # tow = 128
 SSID = "YWM0MjEwYzkxNzll"

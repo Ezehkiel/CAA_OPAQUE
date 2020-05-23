@@ -1,13 +1,19 @@
-from Crypto.Protocol.KDF import scrypt
+__author__ = "Rémi Poulard"
+__copyright__ = "Copyright 2020, Rémi Poulard"
+__license__ = "GPL"
+__version__ = "1.0"
+__maintainer__ = "Rémi Poulard"
+__email__ = "remi.poulard@heig-vd.ch"
+__status__ = "Proof of concept"
+
 from sage.all import Integers, GF, EllipticCurve, Integer
-import socket
 from Crypto.Hash import BLAKE2b, HMAC, SHA256
 from Crypto.Cipher import AES
+from Crypto.Protocol.KDF import scrypt
 from binascii import a2b_hex, b2a_hex
 
+import socket
 
-
-PWD = "password"
 SSID = "YWM0MjEwYzkxNzll"
 
 # tow = 128
@@ -282,7 +288,8 @@ def compute_prf(value, prime, K):
 soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 soc.connect(("127.0.0.1", 12346))
 
-p = input("Enter your password please (the correct password is 'OGQ0MDM3MjAyNTNmYjY5Zjc5ODU2ZmI1M2ZiNTIzY2ZhNDYzMjZjNDU3NjQ5MmIx')\n")
+p = input(
+    "Enter your password please (the correct password is 'OGQ0MDM3MjAyNTNmYjY5Zjc5ODU2ZmI1M2ZiNTIzY2ZhNDYzMjZjNDU3NjQ5MmIx')\n")
 
 """ Phase 1 Client"""
 alpha = compute_alpha(p)
